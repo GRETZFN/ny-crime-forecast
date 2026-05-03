@@ -667,6 +667,12 @@ else:
             key="fc_view",
         )
         show_history = st.checkbox("Include historical trend (2015–2024)", value=True, key="fc_history")
+        if fc_view == "All counties":
+            metric_choice = st.radio(
+                "Metric",
+                ["Crime Rate", "Population"],
+                key="fc_metric",
+            )
 
     with fc_col2:
         if fc_view == "Single county":
@@ -748,27 +754,89 @@ else:
                 )
             st.dataframe(tbl.set_index("Year").round(1), width="stretch")
 
+            # Population forecast chart
+            pop_hist = annual[
+                (annual["County"] == fc_county) & (annual["Year"] >= 2015)
+            ][["Year", "Population"]].dropna().sort_values("Year")
+            pop_fc = county_fc[["target_year", "Population_Projected"]].dropna()
+
+            fig_pop = go.Figure()
+            fig_pop.add_trace(go.Scatter(
+                x=pop_hist["Year"], y=pop_hist["Population"],
+                mode="lines+markers", name="Historical",
+                line=dict(color="#264653", width=2.5), marker=dict(size=6),
+            ))
+            if not pop_hist.empty and not pop_fc.empty:
+                fig_pop.add_trace(go.Scatter(
+                    x=[pop_hist["Year"].iloc[-1], pop_fc["target_year"].iloc[0]],
+                    y=[pop_hist["Population"].iloc[-1], pop_fc["Population_Projected"].iloc[0]],
+                    mode="lines", showlegend=False,
+                    line=dict(color="#2a9d8f", width=1.5, dash="dot"),
+                ))
+            fig_pop.add_trace(go.Scatter(
+                x=pop_fc["target_year"], y=pop_fc["Population_Projected"],
+                mode="lines+markers", name="Projected",
+                line=dict(color="#2a9d8f", width=2.5, dash="dash"),
+                marker=dict(size=8, symbol="diamond"),
+            ))
+            fig_pop.add_vrect(
+                x0=2024.5, x1=2028.5,
+                fillcolor="rgba(42,157,143,0.07)",
+                layer="below", line_width=0,
+            )
+            fig_pop.add_vline(x=2024.5, line_dash="dot", line_color="grey", line_width=1)
+            fig_pop.update_layout(
+                title=f"{fc_county} — Population 2015–2028",
+                xaxis_title="Year",
+                yaxis_title="Population",
+                yaxis=dict(tickformat=","),
+                legend=dict(orientation="h", y=1.12),
+                height=320,
+            )
+            st.plotly_chart(fig_pop, width="stretch")
+
         else:  # All counties view
             yr_options = sorted(forecast["target_year"].dropna().unique().astype(int).tolist())
             sel_yr = st.select_slider(
                 "Forecast year", options=yr_options, value=yr_options[-1], key="fc_year"
             )
+
+            if metric_choice == "Crime Rate":
+                sort_col, bar_col, label, color_scale = (
+                    "Predicted_Crime_Rate_per_100k",
+                    "Predicted_Crime_Rate_per_100k",
+                    "Rate per 100k",
+                    "Reds",
+                )
+                tbl_col_name = f"{sel_yr} Rate (per 100k)"
+                bar_title = f"Top 20 counties — {sel_yr} projected crime rate"
+            else:
+                sort_col, bar_col, label, color_scale = (
+                    "Population_Projected",
+                    "Population_Projected",
+                    "Projected Population",
+                    "Blues",
+                )
+                tbl_col_name = f"{sel_yr} Projected Population"
+                bar_title = f"Top 20 counties — {sel_yr} projected population"
+
             yr_df = (
                 forecast[forecast["target_year"] == sel_yr]
-                .sort_values("Predicted_Crime_Rate_per_100k", ascending=False)
+                .sort_values(sort_col, ascending=False)
                 .reset_index(drop=True)
             )
-            yr_df.index += 1  # 1-based rank
+            yr_df.index += 1
 
             fc_left, fc_right = st.columns([1.2, 0.8])
             with fc_left:
                 fig_rank = px.bar(
-                    yr_df.head(20), x="Predicted_Crime_Rate_per_100k", y="County",
+                    yr_df.dropna(subset=[bar_col]).head(20),
+                    x=bar_col, y="County",
                     orientation="h",
-                    color="Predicted_Crime_Rate_per_100k",
-                    color_continuous_scale="Reds",
-                    labels={"Predicted_Crime_Rate_per_100k": "Rate per 100k", "County": ""},
-                    title=f"Top 20 counties — {sel_yr} projected rate",
+                    color=bar_col,
+                    color_continuous_scale=color_scale,
+                    labels={bar_col: label, "County": ""},
+                    title=bar_title,
                 )
                 fig_rank.update_layout(
                     yaxis=dict(autorange="reversed"),
@@ -776,13 +844,20 @@ else:
                     height=500,
                     margin=dict(l=10, r=10, t=40, b=10),
                 )
+                if metric_choice == "Population":
+                    fig_rank.update_xaxes(tickformat=",")
                 st.plotly_chart(fig_rank, width="stretch")
 
             with fc_right:
-                # Sortable full table
-                tbl_all = yr_df[["County", "Predicted_Crime_Rate_per_100k"]].copy()
-                tbl_all.columns = ["County", f"{sel_yr} Rate (per 100k)"]
-                tbl_all[f"{sel_yr} Rate (per 100k)"] = tbl_all[f"{sel_yr} Rate (per 100k)"].round(1)
+                tbl_all = yr_df[["County", bar_col]].copy()
+                if metric_choice == "Population":
+                    tbl_all[bar_col] = tbl_all[bar_col].apply(
+                        lambda v: f"{int(v):,}" if pd.notna(v) else "n/a"
+                    )
+                    tbl_all.columns = ["County", tbl_col_name]
+                else:
+                    tbl_all[bar_col] = tbl_all[bar_col].round(1)
+                    tbl_all.columns = ["County", tbl_col_name]
                 st.dataframe(tbl_all, width="stretch", height=500)
 
 st.divider()
