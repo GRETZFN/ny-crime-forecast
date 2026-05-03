@@ -304,18 +304,24 @@ with st.sidebar:
 
 st.title("New York County Crime Rate Forecast")
 st.markdown(
-    "This dashboard presents the results of an expanding-window backtest comparing "
-    "four models at **1-year** and **2-year** forecast horizons across all NY counties. "
-    "Use the sidebar to explore results by county and model."
+    "This dashboard uses historical crime data from all 62 NY counties to **predict future crime rates** "
+    "and compare how well different forecasting models perform. "
+    "You can explore predictions by county, see how models stack up against each other, "
+    "and understand what the numbers mean — no data background required. "
+    "Use the sidebar to filter by county or model."
 )
 
 # ── KPI row ──────────────────────────────────────────────────────────────────
 
 k1, k2, k3, k4 = st.columns(4)
-k1.metric("Best 1-Year MAE",          f"{best_1yr['MAE']:.1f}",                           best_1yr["Model"])
-k2.metric("Best 2-Year MAE",          f"{best_2yr['MAE']:.1f}",                           best_2yr["Model"])
-k3.metric("Horizon Accuracy Penalty", f"+{best_2yr['MAE'] - best_1yr['MAE']:.1f}",        "2yr vs 1yr (best model)")
-k4.metric("Counties Covered",         f"{annual['County'].nunique()}")
+k1.metric("Best 1-Year MAE",          f"{best_1yr['MAE']:.1f}",                           best_1yr["Model"],
+          help="MAE = Mean Absolute Error. On average, the best model's crime rate prediction is off by this many crimes per 100,000 people when forecasting 1 year ahead. Lower is better.")
+k2.metric("Best 2-Year MAE",          f"{best_2yr['MAE']:.1f}",                           best_2yr["Model"],
+          help="Same as above but forecasting 2 years ahead. It's always harder to predict further into the future, so this number is higher.")
+k3.metric("Horizon Accuracy Penalty", f"+{best_2yr['MAE'] - best_1yr['MAE']:.1f}",        "2yr vs 1yr (best model)",
+          help="How much extra error is introduced by forecasting one additional year out. A smaller number means the model stays accurate even at longer range.")
+k4.metric("Counties Covered",         f"{annual['County'].nunique()}",
+          help="Number of NY counties included in the analysis.")
 
 st.info(
     "The 1-year horizon achieves lower MAE for every model because it is an inherently easier forecasting task. "
@@ -641,6 +647,24 @@ leaderboard = horizon_compare[["Model", "MAE_1yr", "MAE_2yr", "RMSE_1yr", "RMSE_
     }
 )
 st.dataframe(leaderboard.round(3), width="stretch")
+
+with st.expander("📖 What do these numbers mean? (plain-English guide)"):
+    st.markdown(
+        """
+        | Term | Plain English |
+        |------|---------------|
+        | **MAE** *(Mean Absolute Error)* | On average, how far off the model's prediction is. An MAE of 180 means the model is typically wrong by about 180 crimes per 100,000 people — in either direction. Lower = more accurate. |
+        | **RMSE** *(Root Mean Squared Error)* | Similar to MAE but punishes big misses more heavily. If RMSE is much higher than MAE, the model occasionally makes large errors. Lower = more accurate. |
+        | **R²** *(R-Squared)* | How much of the variation in crime rates the model explains. A score of 1.0 = perfect, 0.0 = no better than just guessing the average. Anything above 0.8 is considered strong. |
+        | **Horizon Penalty** | How much accuracy the model loses when asked to forecast 2 years out instead of 1. A small number means the model holds up well at longer range. |
+        | **1-Year / 2-Year Horizon** | Whether the model is predicting crime rates for next year (1-year) or two years from now (2-year). Two-year forecasts are harder but more useful for planning. |
+        | **Expanding Window Backtest** | A way of testing models honestly: the model is trained only on past data, then asked to predict the next year — just like it would work in real life. This is repeated for multiple years to get a reliable accuracy estimate. |
+        | **Gradient Boosting** | A type of machine learning model that builds many small decision trees in sequence, each one correcting the mistakes of the previous. It consistently outperformed the other models in this project. |
+        | **Stacking** | A technique where multiple models each make a prediction, and then a second-level model learns the best way to combine those predictions into one final answer. |
+        | **Meta-learner** | The second-level model in a stacking setup that combines the base models' outputs. |
+        | **Crime Rate per 100k** | The number of crimes that would occur if the population were exactly 100,000 people. This lets you fairly compare large and small counties. |
+        """
+    )
 
 st.divider()
 
