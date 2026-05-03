@@ -142,6 +142,7 @@ NY_COUNTY_CENTROIDS: dict[str, tuple[float, float]] = {
 
 @st.cache_data
 def load_data() -> dict[str, pd.DataFrame]:
+    forecast_path = DATA_DIR / "forecast_2025_2028.csv"
     data = {
         "annual": pd.read_csv(DATA_DIR / "annual_county_rate_interp.csv"),
         "summary_1yr": pd.read_csv(DATA_DIR / "backtest_1yr_summary.csv"),
@@ -151,6 +152,7 @@ def load_data() -> dict[str, pd.DataFrame]:
         "preds_1yr": pd.read_csv(DATA_DIR / "backtest_1yr_predictions.csv"),
         "preds_2yr": pd.read_csv(DATA_DIR / "backtest_2yr_predictions.csv"),
         "config": pd.read_csv(DATA_DIR / "model_config.csv"),
+        "forecast": pd.read_csv(forecast_path) if forecast_path.exists() else pd.DataFrame(),
     }
     for key in ["annual", "preds_1yr", "preds_2yr", "results_1yr", "results_2yr"]:
         if "Year" in data[key].columns:
@@ -263,6 +265,9 @@ best_1yr = summary_1yr.sort_values("MAE").iloc[0]
 best_2yr = summary_2yr.sort_values("MAE").iloc[0]
 counties = sorted(annual["County"].dropna().unique())
 default_county = "Albany" if "Albany" in counties else counties[0]
+forecast = data["forecast"].copy()
+if not forecast.empty:
+    forecast["target_year"] = pd.to_numeric(forecast["target_year"], errors="coerce")
 
 # ── sidebar ──────────────────────────────────────────────────────────────────
 
@@ -636,6 +641,149 @@ leaderboard = horizon_compare[["Model", "MAE_1yr", "MAE_2yr", "RMSE_1yr", "RMSE_
     }
 )
 st.dataframe(leaderboard.round(3), width="stretch")
+
+st.divider()
+
+# ── county forecast 2025-2028 ────────────────────────────────────────────────
+
+st.subheader("County crime rate predictions: 2025 – 2028")
+
+if forecast.empty:
+    st.warning("Forecast data not found. Re-run the export cell in the notebook.")
+else:
+    fc_counties = sorted(forecast["County"].dropna().unique())
+    fc_col1, fc_col2 = st.columns([1, 3])
+
+    with fc_col1:
+        fc_county = st.selectbox(
+            "Select county",
+            fc_counties,
+            index=fc_counties.index(selected_county) if selected_county in fc_counties else 0,
+            key="fc_county",
+        )
+        fc_view = st.radio(
+            "View",
+            ["Single county", "All counties"],
+            key="fc_view",
+        )
+        show_history = st.checkbox("Include historical trend (2015–2024)", value=True, key="fc_history")
+
+    with fc_col2:
+        if fc_view == "Single county":
+            county_fc = forecast[forecast["County"] == fc_county].sort_values("target_year")
+
+            if show_history:
+                hist_c = annual[
+                    (annual["County"] == fc_county) & (annual["Year"] >= 2015)
+                ].sort_values("Year")
+                fig_fc = go.Figure()
+                # Historical actuals
+                fig_fc.add_trace(go.Scatter(
+                    x=hist_c["Year"],
+                    y=hist_c["Crime_Rate_per_100k"],
+                    mode="lines+markers",
+                    name="Historical",
+                    line=dict(color="#264653", width=2.5),
+                    marker=dict(size=6),
+                ))
+                # Dashed connector from last actual to first forecast
+                if not hist_c.empty and not county_fc.empty:
+                    connector_x = [hist_c["Year"].iloc[-1], county_fc["target_year"].iloc[0]]
+                    connector_y = [hist_c["Crime_Rate_per_100k"].iloc[-1],
+                                   county_fc["Predicted_Crime_Rate_per_100k"].iloc[0]]
+                    fig_fc.add_trace(go.Scatter(
+                        x=connector_x, y=connector_y,
+                        mode="lines", showlegend=False,
+                        line=dict(color="#ff7f0e", width=1.5, dash="dot"),
+                    ))
+                # Forecast
+                fig_fc.add_trace(go.Scatter(
+                    x=county_fc["target_year"],
+                    y=county_fc["Predicted_Crime_Rate_per_100k"],
+                    mode="lines+markers",
+                    name="Forecast (GB)",
+                    line=dict(color="#ff7f0e", width=2.5, dash="dash"),
+                    marker=dict(size=8, symbol="diamond"),
+                ))
+                fig_fc.add_vrect(
+                    x0=2024.5, x1=2028.5,
+                    fillcolor="rgba(255,127,14,0.07)",
+                    layer="below", line_width=0,
+                )
+                fig_fc.add_vline(x=2024.5, line_dash="dot", line_color="grey", line_width=1)
+            else:
+                fig_fc = px.line(
+                    county_fc, x="target_year", y="Predicted_Crime_Rate_per_100k",
+                    markers=True,
+                    labels={"target_year": "Year", "Predicted_Crime_Rate_per_100k": "Crime rate per 100k"},
+                    color_discrete_sequence=["#ff7f0e"],
+                )
+                fig_fc.update_traces(line=dict(dash="dash", width=2.5), marker=dict(size=8, symbol="diamond"))
+
+            fig_fc.update_layout(
+                title=f"{fc_county} — Forecast 2025–2028",
+                xaxis_title="Year",
+                yaxis_title="Crime rate per 100k",
+                legend=dict(orientation="h", y=1.12),
+                height=380,
+            )
+            st.plotly_chart(fig_fc, width="stretch")
+
+            # Summary table for this county
+            display_cols = {
+                "target_year": "Year",
+                "Predicted_Crime_Rate_per_100k": "Predicted Rate (per 100k)",
+                "Population_Projected": "Projected Population",
+                "Total_Crimes_Projected": "Projected Total Crimes",
+            }
+            tbl = county_fc[[c for c in display_cols if c in county_fc.columns]].rename(columns=display_cols)
+            tbl["Year"] = tbl["Year"].astype(int)
+            if "Projected Population" in tbl.columns:
+                tbl["Projected Population"] = tbl["Projected Population"].apply(
+                    lambda v: f"{int(v):,}" if pd.notna(v) else "n/a"
+                )
+            if "Projected Total Crimes" in tbl.columns:
+                tbl["Projected Total Crimes"] = tbl["Projected Total Crimes"].apply(
+                    lambda v: f"{int(v):,}" if pd.notna(v) else "n/a"
+                )
+            st.dataframe(tbl.set_index("Year").round(1), width="stretch")
+
+        else:  # All counties view
+            yr_options = sorted(forecast["target_year"].dropna().unique().astype(int).tolist())
+            sel_yr = st.select_slider(
+                "Forecast year", options=yr_options, value=yr_options[-1], key="fc_year"
+            )
+            yr_df = (
+                forecast[forecast["target_year"] == sel_yr]
+                .sort_values("Predicted_Crime_Rate_per_100k", ascending=False)
+                .reset_index(drop=True)
+            )
+            yr_df.index += 1  # 1-based rank
+
+            fc_left, fc_right = st.columns([1.2, 0.8])
+            with fc_left:
+                fig_rank = px.bar(
+                    yr_df.head(20), x="Predicted_Crime_Rate_per_100k", y="County",
+                    orientation="h",
+                    color="Predicted_Crime_Rate_per_100k",
+                    color_continuous_scale="Reds",
+                    labels={"Predicted_Crime_Rate_per_100k": "Rate per 100k", "County": ""},
+                    title=f"Top 20 counties — {sel_yr} projected rate",
+                )
+                fig_rank.update_layout(
+                    yaxis=dict(autorange="reversed"),
+                    coloraxis_showscale=False,
+                    height=500,
+                    margin=dict(l=10, r=10, t=40, b=10),
+                )
+                st.plotly_chart(fig_rank, width="stretch")
+
+            with fc_right:
+                # Sortable full table
+                tbl_all = yr_df[["County", "Predicted_Crime_Rate_per_100k"]].copy()
+                tbl_all.columns = ["County", f"{sel_yr} Rate (per 100k)"]
+                tbl_all[f"{sel_yr} Rate (per 100k)"] = tbl_all[f"{sel_yr} Rate (per 100k)"].round(1)
+                st.dataframe(tbl_all, width="stretch", height=500)
 
 st.divider()
 
